@@ -1,0 +1,3 @@
+- Implement the vanilla RNN, GRU and LSTM models for sentiment analysis.
+
+- Use the train, dev and test set for testing the models. Record the performance on test set.
