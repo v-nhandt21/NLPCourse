@@ -1,0 +1,7 @@
+train_loss_list, valid_loss_list, global_steps_list = load_metrics("/home/ubuntu/NLPCourse/Assignment/Sentiment_analysis/Assignment4_BERT" + '/metrics.pt')
+plt.plot(global_steps_list, train_loss_list, label='Train')
+plt.plot(global_steps_list, valid_loss_list, label='Valid')
+plt.xlabel('Global Steps')
+plt.ylabel('Loss')
+plt.legend()
+plt.show() 
