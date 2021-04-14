@@ -12,7 +12,7 @@ train_iter, valid_iter, test_iter, TAGS, TEXT, fields = LoadData()
 device = "cuda"
 
 def train(model,optimizer,train_loader = train_iter,valid_loader = valid_iter,
-        num_epochs = 30,
+        num_epochs = 70,
         eval_every = len(train_iter),
         file_path = "/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/BiLSTM_NER",
         best_valid_loss = float("Inf")):

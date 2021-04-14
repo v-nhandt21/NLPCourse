@@ -18,8 +18,8 @@ def check_infer():
     with open("/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/predict.txt", "r", encoding="utf-8") as fr1:
         text_infer1 = fr1.read().splitlines()
     for t, t1 in zip(text_infer, text_infer1):
-        print("ok")
-        assert len(t.split(" ")) == len(t1.split(" "))
+        
+        assert len(t.split(" ") ) - 1 == len(t1.split(" "))
 
 def evaluate(model):
         # This method applies the trained model to a list of sentences.
@@ -32,12 +32,11 @@ def evaluate(model):
         with open("/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/predict_bilstm.txt", "w+", encoding="utf-8") as fw:
             with torch.no_grad():
                 for (text,tags), _ in test_iter:
+
                     output = model(text,tags)
                     top_predictions = crf.decode(output)
 
                     predicted_tags = [TAGS.vocab.itos[t] for t in top_predictions[0] ]
-                
-                    predicted_tags = predicted_tags[1:]
 
                     fw.write(" ".join(predicted_tags) + "\n")
                     print(predicted_tags)
@@ -53,4 +52,5 @@ if __name__ == '__main__':
 
     check_infer()
 
- # Accuracy: 0.8668575518969219
+# Precision = 72.72727272727273 , Recall = 4.4692737430167595 , F1 = 8.421052631578947  30 epoch
+# Precision = 54.54545454545455 , Recall = 100.0 , F1 = 70.58823529411765    50 epoch
