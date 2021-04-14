@@ -8,7 +8,7 @@ device = "cuda"
 count = 0
 def evaluate(model, test_loader, tagvocab):
     model.eval()
-    with open("/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/predict.txt", "w+", encoding="utf-8") as fw:
+    with open("/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/predict1.txt", "w+", encoding="utf-8") as fw:
         with torch.no_grad():
             for (text,tags), _ in test_loader:
                 predictions = model(text)
@@ -40,6 +40,6 @@ if __name__ == '__main__':
 
     evaluate(best_model, test_iter, tagvocab)
 
-    check_infer()
+    #check_infer()
 
  # Accuracy: 0.8668575518969219

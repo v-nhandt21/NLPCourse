@@ -1,17 +1,24 @@
-from model import BERT_Seqence
-from utils import LoadData, save_checkpoint, save_metrics
+from model import AttentionBiLSTM_Seqence
+from utils import LoadData, save_checkpoint, save_metrics,loss_visual
 import torch
 import torch.optim as optim
 import torch.nn as nn
+from torchcrf import CRF
 
-train_iter, valid_iter, test_iter, tagvocab = LoadData()
+train_iter, valid_iter, test_iter, TAGS, TEXT, fields = LoadData()
+# n_vocab=embedding_matrix.shape[0]
+# n_embed=embedding_matrix.shape[1]
+
 device = "cuda"
 
-def train(model,optimizer,criterion = nn.BCELoss(),train_loader = train_iter,valid_loader = valid_iter,
-        num_epochs = 4,
-        eval_every = len(train_iter) // 2,
-        file_path = "/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/BERT_NER",
+def train(model,optimizer,train_loader = train_iter,valid_loader = valid_iter,
+        num_epochs = 30,
+        eval_every = len(train_iter),
+        file_path = "/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/BiLSTM_NER",
         best_valid_loss = float("Inf")):
+
+    crf = CRF(len(TAGS.vocab)).to(device)
+    train_loss, valid_loss = [],[]
 
     running_loss = 0.0
     valid_running_loss = 0.0
@@ -21,38 +28,15 @@ def train(model,optimizer,criterion = nn.BCELoss(),train_loader = train_iter,val
     global_steps_list = []
 
     # training loop
+    model.to(device)
     model.train()
     for epoch in range(num_epochs):
 
-        # count = 0
-        # if epoch < 3:
-        #     for param in net.children():
-        #         count +=1
-        #         if count < 4: #freezing first 3 layers
-        #             param.requires_grad = False
-        # else:
-        #     for param in net.children():
-        #         param.requires_grad = True
-
-
         for (text, tags), _ in train_loader:
-
-            predictions = model(text)
-            tags = tags.permute(1, 0)
-
-            #predictions = [sent len, batch size, output dim]
-            #tags = [sent len, batch size]
             
-            predictions = predictions.view(-1, predictions.shape[-1])
+            output = model(text, tags)
 
-            tags = torch.flatten(tags, start_dim=0)
-            # tags = tags.view(-1)
-            
-            #predictions = [sent len * batch size, output dim]
-            #tags = [sent len * batch size]
-            
-            loss = criterion(predictions, tags)
-
+            loss = -crf(output, tags)
 
             optimizer.zero_grad()
             loss.backward()
@@ -67,13 +51,11 @@ def train(model,optimizer,criterion = nn.BCELoss(),train_loader = train_iter,val
                 model.eval()
                 with torch.no_grad():                    
                     for (text, tags), _ in valid_loader:
+                        
+                        output = model(text, tags)
 
-                        predictions = model(text)
-                        tags = tags.permute(1, 0)
-                        predictions = predictions.view(-1, predictions.shape[-1])
-                        tags = torch.flatten(tags, start_dim=0)
-                        loss = criterion(predictions, tags)
-                    
+                        loss = -crf(output, tags)
+
                         valid_running_loss += loss.item()
 
                 average_train_loss = running_loss / eval_every
@@ -90,20 +72,27 @@ def train(model,optimizer,criterion = nn.BCELoss(),train_loader = train_iter,val
                       .format(epoch+1, num_epochs, global_step, num_epochs*len(train_loader),
                               average_train_loss, average_valid_loss))
 
+                train_loss.append(average_train_loss)
+                valid_loss.append(average_valid_loss)
+
                 if best_valid_loss > average_valid_loss:
                     best_valid_loss = average_valid_loss
                     save_checkpoint(file_path + '/' + 'model.pt', model, best_valid_loss)
                     save_metrics(file_path + '/' + 'metrics.pt', train_loss_list, valid_loss_list, global_steps_list)
-    
+    loss_visual("loss",train_loss, valid_loss)
     save_metrics(file_path + '/' + 'metrics.pt', train_loss_list, valid_loss_list, global_steps_list)
     print('Finished Training!')
 
+
+
+
 if __name__ == '__main__':
-    n_output = len(tagvocab.vocab)
-    model = BERT_Seqence(768, n_output).to(device)
+    n_output = len(TAGS.vocab)
+
+    #model = AttentionBiLSTM_Additive(n_vocab, n_embed, hidden_node= 512, hidden_node_decode = 512, n_output = n_output, embedding_matrix=embedding_matrix).to(device)
+
+    model = AttentionBiLSTM_Seqence(TEXT, TAGS, n_embed=300, n_hidden=128)
 
     optimizer = optim.Adam(model.parameters(), lr=2e-5)
 
-    criterion = nn.CrossEntropyLoss(ignore_index = tagvocab.vocab.stoi[tagvocab.pad_token])
-
-    train(model=model, optimizer=optimizer, criterion=criterion)
+    train(model=model, optimizer=optimizer)

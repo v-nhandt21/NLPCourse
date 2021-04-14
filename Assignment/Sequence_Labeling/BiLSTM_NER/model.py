@@ -3,26 +3,21 @@ import pandas as pd
 
 import torch
 import torch.nn as nn
-from transformers import BertTokenizer, BertGenerationEncoder, BertModel
 import seaborn as sns
 
 
 device="cuda"
 
-# Additive Attention LSTM using Pretrain BERT
-class BERT_LSTM(nn.Module):
+from torchcrf import CRF
 
-    def __init__(self, n_embed, hidden_node, hidden_node_decode, n_output, v_attention_dimensionality):
-        super(BERT, self).__init__()
-
-        self.encoder = BertModel.from_pretrained("bert-base-uncased")
-
-
-        n_hidden = hidden_node
-        n_hidden_decode = int(hidden_node_decode)
-        self.hidden_node = hidden_node
-        self.hidden_node_decode = int(hidden_node_decode) 
+class AttentionBiLSTM_Seqence(nn.Module):
+    
+    def __init__(self, text_field, label_field, n_embed, n_hidden):
+        super(AttentionBiLSTM_Seqence, self).__init__()
         
+        self.n_hidden = n_hidden
+        
+        # LSTM1
         self.linear_hidden_r = nn.Linear(n_hidden, n_hidden)
         self.linear_input_r = nn.Linear(n_embed, n_hidden)
 
@@ -35,33 +30,184 @@ class BERT_LSTM(nn.Module):
         self.linear_hidden_o = nn.Linear(n_hidden, n_hidden)
         self.linear_input_o = nn.Linear(n_embed, n_hidden)
         
-        # For Additive
-        self.linear_additive_h = nn.Linear(n_hidden, v_attention_dimensionality)
-        self.linear_additive_s = nn.Linear(n_hidden_decode, v_attention_dimensionality)
-        
-        self.linear_vdim = nn.Linear(v_attention_dimensionality,1)
-        
-        self.fc_out_attent = nn.Linear(n_hidden + n_hidden_decode, n_output)
-        self.fc_out_lstm = nn.Linear(n_hidden, n_hidden_decode)
-        
-        
-        self.sigmoid = nn.Sigmoid()
-        self.relu = nn.ReLU()
-        self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
-        self.dropout = nn.Dropout(0.5)
+        # LSTM2
+        self.linear_hidden_r2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_r2 = nn.Linear(n_embed, n_hidden)
 
-    def forward(self, text, label):
-        text_fea = self.encoder(text).last_hidden_state                                    # (batch, seq, emb)
+        self.linear_hidden_f2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_f2 = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_g2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_g2 = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_o2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_o2 = nn.Linear(n_embed, n_hidden)
+
+
+        
+        voc_size = len(text_field.vocab)
+        self.n_labels = len(label_field.vocab)       
+        
+        self.embedding = nn.Embedding(voc_size, n_embed)
+        if text_field.vocab.vectors is not None:
+            self.embedding.weight = torch.nn.Parameter(text_field.vocab.vectors, 
+                                                       requires_grad=False)
+
+        self.fc_out = nn.Linear(2*n_hidden, self.n_labels)
+ 
+        self.pad_word_id = text_field.vocab.stoi[text_field.pad_token]
+        self.pad_label_id = label_field.vocab.stoi[label_field.pad_token]
+
+        self.sigmoid = nn.Sigmoid()
+        self.tanh = nn.Tanh()
+                
+    def forward(self, input, tags):
+        embedded = self.embedding(input)    # seq - batch - 300
 
         hidden_stack = []
-        batch = text_fea.shape[0]
-        seq_lenght= text_fea.size(1)
-
-        embedded_words = text_fea.permute(1,0,2)                                      # => (seq_length,batch_size,  n_embed)
-        hidden = torch.zeros(text_fea.size(0), self.hidden_node).to(device)              # batch-node
+        hidden_stack2 = []
+        batch = embedded.size(1)
+        seq_lenght = embedded.size(0)
         
-        c = torch.zeros(text_fea.size(0), self.hidden_node).to(device)
+        hidden = torch.zeros(batch, self.n_hidden).to(device)              # batch-node
+        
+        c = torch.zeros(batch, self.n_hidden).to(device)
+        c2 = torch.zeros(batch, self.n_hidden).to(device)
+        
+        for i in range(seq_lenght):                                                         #for i in seq_length
+
+            ir=self.linear_input_r(embedded[i])
+            hr=self.linear_hidden_r(hidden)
+            r= ir.add(hr)
+            rt = self.sigmoid(r)
+            
+            iff=self.linear_input_f(embedded[i])
+            hff=self.linear_hidden_f(hidden)
+            ff= iff.add(hff)
+            fft = self.sigmoid(ff)
+            
+            ig=self.linear_input_g(embedded[i])
+            hg=self.linear_hidden_g(hidden)
+            g= ig.add(hg)
+            gt = self.tanh(g)
+            
+            io=self.linear_input_o(embedded[i])
+            ho=self.linear_hidden_o(hidden)
+            o= io.add(ho)
+            ot = self.sigmoid(o)
+            
+            c = fft*c + rt*gt
+            hidden = ot*self.tanh(c)
+            
+            hidden_stack.append(hidden)
+            
+        for i in range(seq_lenght-1, -1, -1):                                                         #for i in seq_length
+
+            ir2=self.linear_input_r2(embedded[i])
+            hr2=self.linear_hidden_r2(hidden)
+            r2= ir2.add(hr2)
+            rt2 = self.sigmoid(r2)
+            
+            iff2=self.linear_input_f2(embedded[i])
+            hff2=self.linear_hidden_f2(hidden)
+            ff2= iff2.add(hff2)
+            fft2 = self.sigmoid(ff2)
+            
+            ig2=self.linear_input_g2(embedded[i])
+            hg2=self.linear_hidden_g2(hidden)
+            g2= ig2.add(hg2)
+            gt2 = self.tanh(g2)
+            
+            io2=self.linear_input_o2(embedded[i])
+            ho2=self.linear_hidden_o2(hidden)
+            o2= io2.add(ho2)
+            ot2 = self.sigmoid(o2)
+            
+            c2 = fft2*c2 + rt2*gt2
+            hidden2 = ot2*self.tanh(c2)
+            
+            hidden_stack2.insert(0,hidden2)
+        
+        outputs1 = torch.stack(hidden_stack)                                   #[seq-len, batch, hidden-node]
+        outputs2 = torch.stack(hidden_stack2)                                       #[seq-len,batch,  hidden-node]
+
+        outputs = torch.cat((outputs1,outputs2),2)                                                   #[seq-len,batch,  hidden-node*2]
+
+        
+
+        # seq - batch - n_hidden*2
+        out = self.fc_out(outputs)
+        
+        pad_mask = (input == self.pad_word_id).float()
+        out[:, :, self.pad_label_id] += pad_mask*10000
+
+        # We return the loss value. The CRF returns the log likelihood, but we return 
+        # the *negative* log likelihood as the loss value.            
+        # PyTorch's optimizers *minimize* the loss, while we want to *maximize* the
+        # log likelihood.
+        return out #-self.crf(out, labels)
+
+
+
+
+# Additive Attention LSTM using Pretrain BERT
+class AttentionBiLSTM_Additive(nn.Module):
+    
+    def __init__(self, n_vocab, n_embed, n_hidden, n_hidden_decode, n_output,embedding_matrix):
+        super().__init__()
+        
+        self.n_hidden = n_hidden
+        self.n_hidden_decode = int(n_hidden_decode)
+        self.layers = layers
+        
+        # LSTM1
+        self.linear_hidden_r = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_r = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_f = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_f = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_g = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_g = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_o = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_o = nn.Linear(n_embed, n_hidden)
+        
+        # LSTM2
+        self.linear_hidden_r2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_r2 = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_f2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_f2 = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_g2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_g2 = nn.Linear(n_embed, n_hidden)
+
+        self.linear_hidden_o2 = nn.Linear(n_hidden, n_hidden)
+        self.linear_input_o2 = nn.Linear(n_embed, n_hidden)
+
+
+        
+        self.embedding = nn.Embedding(n_vocab, n_embed)
+        self.embedding.weight=nn.Parameter(torch.tensor(embedding_matrix,dtype=torch.float32))
+
+        self.dropout = nn.Dropout(0.3)
+
+        self.fc_output = nn.Linear(n_hidden*2,  n_output)   
+        
+    def forward (self, input_words):                                                        # => (batch size, sent len)
+        
+        hidden_stack = []
+        hidden_stack2 = []
+        batch = input_words.shape[0]
+        seq_lenght= input_words.size(1)
+        
+        embedded_words = self.embedding(input_words)                                        # => (batch_size, seq_length, n_embed)
+        embedded_words = embedded_words.permute(1,0,2)                                      # => (seq_length,batch_size,  n_embed)
+        hidden = torch.zeros(input_words.size(0), self.n_hidden).to(device)              # batch-node
+        
+        c = torch.zeros(input_words.size(0), self.n_hidden).to(device)
+        c2 = torch.zeros(input_words.size(0), self.n_hidden).to(device)
         
         for i in range(seq_lenght):                                                         #for i in seq_length
 
@@ -89,94 +235,39 @@ class BERT_LSTM(nn.Module):
             hidden = ot*self.tanh(c)
             
             hidden_stack.append(hidden)
+            
+        for i in range(seq_lenght-1, -1, -1):                                                         #for i in seq_length
+
+            ir2=self.linear_input_r2(embedded_words[i])
+            hr2=self.linear_hidden_r2(hidden)
+            r2= ir2.add(hr2)
+            rt2 = self.sigmoid(r2)
+            
+            iff2=self.linear_input_f2(embedded_words[i])
+            hff2=self.linear_hidden_f2(hidden)
+            ff2= iff2.add(hff2)
+            fft2 = self.sigmoid(ff2)
+            
+            ig2=self.linear_input_g2(embedded_words[i])
+            hg2=self.linear_hidden_g2(hidden)
+            g2= ig2.add(hg2)
+            gt2 = self.tanh(g2)
+            
+            io2=self.linear_input_o2(embedded_words[i])
+            ho2=self.linear_hidden_o2(hidden)
+            o2= io2.add(ho2)
+            ot2 = self.sigmoid(o2)
+            
+            c2 = fft2*c2 + rt2*gt2
+            hidden2 = ot2*self.tanh(c2)
+            
+            hidden_stack2.insert(0,hidden2)
         
-        
-        final_hidden = self.fc_out_lstm(hidden)                                                      #[batch, hidden-node] => [batch, hidden-node-decode]
-        
-        outputs = torch.stack(hidden_stack).permute(1,0,2)                                           #[batch, seq-len, hidden-node]
-        
-        WH = self.linear_additive_h(outputs)                                                         # => [batch, seq-len, v_dim]
+        outputs1 = torch.stack(hidden_stack).permute(1,0,2)                                           #[batch, seq-len, hidden-node]
+        outputs2 = torch.stack(hidden_stack2).permute(1,0,2)                                           #[batch, seq-len, hidden-node]
 
-        final_hidden_seq = final_hidden.repeat(1,seq_lenght)                                         #[batch, hidden-node-decode] => [batch, seq-len, hidden-node-decode]
-        final_hidden_seq = final_hidden_seq.view(-1,seq_lenght, self.hidden_node_decode)             # ? Right way ? 
-        
-        
-        WS = self.linear_additive_s(final_hidden_seq)                                                # => [batch, seq-len, v_dim]
-        
-        attention_score = self.tanh(WH+WS)                                                           # => [batch, seq-len, v_dim]
+        outputs = torch.cat((outputs1,outputs2),2)                                                   #[batch, seq-len, hidden-node*2]
 
-        attention_score = self.linear_vdim(attention_score).squeeze(2)
-        
-        attention_distribution = self.softmax(attention_score)                                       # [batch, seq-len]
-        
-        attention_output = torch.bmm(
-            outputs.permute(0,2,1),                                                                                 #[batch, hidden-node, seq-len]
-            attention_distribution.view(batch,seq_lenght,1)                                          #[batch, seq_len, 1]
-        ).squeeze(2)                                                                                 #[batch, hidden-node]
-        
-        
-        out_atten = torch.cat([final_hidden, attention_output],dim=1)                                #[batch, hidden-node+ hidden-node-decoder]  
-        out = self.fc_out_attent(out_atten)                                                          #[batch, hidden-node]
-        
-        sig = self.sigmoid(out)
-        return sig
+        predictions = self.fc(outputs)                                                                 #[batch, seq-len, n_output]
 
-
-
-
-
-
-
-
-
-
-import matplotlib.pyplot as plt
-import pandas as pd
-
-import torch
-import torch.nn as nn
-from transformers import BertTokenizer, BertGenerationEncoder, BertModel
-import seaborn as sns
-
-
-device="cuda"
-
-# Additive Attention LSTM using Pretrain BERT
-class BERT_Seqence(nn.Module):
-
-    def __init__(self, n_embed, n_output):
-        super(BERT_Seqence, self).__init__()
-
-        self.encoder = BertModel.from_pretrained("bert-base-uncased")
-
-        self.fc = nn.Linear(n_embed,  n_output)        
-        
-        self.sigmoid = nn.Sigmoid()
-        self.relu = nn.ReLU()
-        self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
-        self.dropout = nn.Dropout(0.5)
-
-    def forward(self, text):
-        text_fea = self.encoder(text).last_hidden_state                                    # (batch, seq, emb)
-
-        hidden_stack = []
-        batch = text_fea.shape[0]
-        seq_lenght= text_fea.size(1)
-
-        embedded_words = text_fea.permute(1,0,2)                                      # => (seq_length,batch_size,  n_embed)
-        
-                    
-        #embedded = [sent len, batch size, emb dim]
-        
-        predictions = self.fc(self.dropout(embedded_words))
-        
-        #predictions = [sent len, batch size, output dim]
-        
-        return predictions
-
-
-
-
-
-
+        return predictions.permute(1,0,2)                                                           # [sent len, batch size, output dim]

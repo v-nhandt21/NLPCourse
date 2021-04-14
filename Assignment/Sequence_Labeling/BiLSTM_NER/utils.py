@@ -5,74 +5,16 @@ from transformers import BertTokenizer
 import functools
 
 device = "cuda"
+import matplotlib.pyplot as plt
 
-def cut_and_convert_to_id(tokens, tokenizer, max_input_length):
-    tokens = tokens[:max_input_length-1]
-    tokens = tokenizer.convert_tokens_to_ids(tokens)
-    return tokens
+def loss_visual(name, train_loss, valid_loss):
+    plt.plot(train_loss, color='blue')
+    plt.plot(valid_loss, color='red')
 
-def cut_to_max_length(tokens, max_input_length):
-    tokens = tokens[:max_input_length-1]
-    return tokens
+    x1,x2,y1,y2 = plt.axis()  
+    plt.axis((x1,x2,50,500))
 
-def LoadData():
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-
-    #MAX_SEQ_LEN = tokenizer.max_model_input_sizes['bert-base-uncased']
-    MAX_SEQ_LEN = 128
-
-    text_preprocessor = functools.partial(cut_and_convert_to_id,
-                                      tokenizer = tokenizer,
-                                      max_input_length = MAX_SEQ_LEN)
-
-    tag_preprocessor = functools.partial(cut_to_max_length,
-                                        max_input_length = MAX_SEQ_LEN)
-
-
-    INIT_INDEX = tokenizer.convert_tokens_to_ids(tokenizer.cls_token)
-    PAD_INDEX = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
-    UNK_INDEX = tokenizer.convert_tokens_to_ids(tokenizer.unk_token)
-
-    TEXT = Field(use_vocab = False,
-                  lower = True,
-                  preprocessing = text_preprocessor,
-                  init_token = INIT_INDEX,                      # Bert pretrain need start token
-                  pad_token = PAD_INDEX,
-                  unk_token = UNK_INDEX,
-
-                  include_lengths=False, batch_first=True
-                  )
-
-    TAGS = Field(unk_token = None,
-                        batch_first=True,
-                        init_token = '<pad>',                       # Them vao cho deu voi tren, nhung khong tinh loss cho cls
-                        preprocessing = tag_preprocessor)
-
-
-    # label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
-    # text_field = Field(use_vocab=False, tokenize=tokenizer.encode, lower=False, include_lengths=False, batch_first=True,
-    #                 fix_length=MAX_SEQ_LEN, pad_token=PAD_INDEX, unk_token=UNK_INDEX)
-
-    fields = [('text', TEXT), ('tag', TAGS)]
-    train, valid, test = TabularDataset.splits(path="/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/", train='train.tsv', validation='dev.tsv',
-                                            test='test.tsv', format='TSV', fields=fields, skip_header=True)
-
-    
-    
-    TAGS.build_vocab(train)
-    
-    
-    
-    device = "cuda"
-    train_iter = BucketIterator(train, batch_size=16, sort_key=lambda x: len(x.text),
-                                device=device, train=True, sort=True, sort_within_batch=True)
-    valid_iter = BucketIterator(valid, batch_size=16, sort_key=lambda x: len(x.text),
-                                device=device, train=True, sort=True, sort_within_batch=True)
-    test_iter = Iterator(test, batch_size=1, device=device, train=False, shuffle=False, sort=False)
-
-
-    return train_iter, valid_iter, test_iter, TAGS
-
+    plt.savefig(name + '.png')
 
 def NormData(filetext, filetag, fileout):
     with open(fileout, "w+", encoding="utf-8") as fw:
@@ -83,7 +25,6 @@ def NormData(filetext, filetag, fileout):
                 tags = f1.read().splitlines()
                 for text,tag in zip(texts,tags):
                     fw.write( text+ "\t"+tag+"\n")
-
 
 def save_checkpoint(save_path, model, valid_loss):
 
@@ -132,6 +73,34 @@ def load_metrics(load_path):
     return state_dict['train_loss_list'], state_dict['valid_loss_list'], state_dict['global_steps_list']
 
 
+def LoadData():
+
+    # TEXT = Field(init_token='<bos>', eos_token='<eos>', sequential=True)
+    # TAGS = Field(init_token='<bos>', eos_token='<eos>', sequential=True, unk_token=None)
+
+    TEXT = Field(sequential=True)
+    TAGS = Field(sequential=True, unk_token=None)
+
+    fields = [('text', TEXT), ('tag', TAGS)]
+    train, valid, test = TabularDataset.splits(path="/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/", train='train.tsv', validation='dev.tsv',
+                                            test='test.tsv', format='TSV', fields=fields, skip_header=True)
+
+    
+    
+    TAGS.build_vocab(train)
+    embed_len = 300
+    TEXT.build_vocab(train, vectors="glove.6B.300d")
+    
+    
+    
+    device = "cuda"
+    train_iter = BucketIterator(train, batch_size=16, sort_key=lambda x: len(x.text),
+                                device=device, train=True, sort=True, sort_within_batch=True)
+    valid_iter = BucketIterator(valid, batch_size=16, sort_key=lambda x: len(x.text),
+                                device=device, train=True, sort=True, sort_within_batch=True)
+    test_iter = Iterator(test, batch_size=1, device=device, train=False, shuffle=False, sort=False)
+
+    return train_iter, valid_iter, test_iter, TAGS, TEXT, fields
 
 if __name__ == '__main__':
     filetext = "/home/ubuntu/NLPCourse/Assignment/Sequence_Labeling/train.text"
